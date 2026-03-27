@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Http;
 use App\Models\User;
 use App\Models\Role;
 use App\Models\Order;
@@ -31,6 +32,58 @@ Route::post('/api/login', function (Request $request) {
 
 // Защищенные API маршруты
 Route::middleware('auth')->group(function () {
+    
+    // ==================== DaData API МАРШРУТЫ ====================
+    Route::post('/api/suggest', function (Request $request) {
+		$query = $request->input('query');
+		$city = $request->input('city');
+		$type = $request->input('type');
+		
+		if (!$query || strlen($query) < 2) {
+			return response()->json(['suggestions' => []]);
+		}
+		
+		$token = env('DADATA_TOKEN');
+		if (!$token) {
+			\Log::error('DADATA_TOKEN not set');
+			return response()->json(['suggestions' => []]);
+		}
+		
+		$params = [
+			'query' => $query,
+			'count' => 10
+		];
+		
+		// Если тип = city, ищем только города
+		if ($type === 'city') {
+			$params['from_bound'] = ['value' => 'city'];
+			$params['to_bound'] = ['value' => 'city'];
+		}
+		
+		// Если передан город, фильтруем адреса по городу
+		if ($city && strlen($city) > 2) {
+			$params['locations'] = [
+				['city' => $city]
+			];
+		}
+		
+		try {
+			$response = Http::withHeaders([
+				'Authorization' => 'Token ' . $token,
+				'Content-Type' => 'application/json',
+			])->timeout(10)->post('https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/address', $params);
+			
+			if ($response->successful()) {
+				return response()->json($response->json());
+			}
+			
+			return response()->json(['suggestions' => []]);
+			
+		} catch (\Exception $e) {
+			\Log::error('DaData error: ' . $e->getMessage());
+			return response()->json(['suggestions' => []]);
+		}
+	});
     
     // AUTH
     Route::get('/api/user', function (Request $request) {
@@ -271,42 +324,42 @@ Route::middleware('auth')->group(function () {
     });
     
     Route::get('/api/orders/{id}', function ($id) {
-		$order = Order::with([
-			'manager', 
-			'customer', 
-			'carrier', 
-			'driver',
-			'legs.points',
-			'legs.cargos',
-			'paymentSchedules'
-		])->findOrFail($id);
-		
-		$data = $order->toArray();
-		$data['status'] = $order->status;
-		
-		// Добавляем поля из legs для удобства модалки
-		$leg = $order->legs->first();
-		if ($leg) {
-			$loadingPoint = $leg->points->where('type', 'loading')->first();
-			$unloadingPoint = $leg->points->where('type', 'unloading')->first();
-			
-			$data['loading_point'] = $loadingPoint?->address ?? $loadingPoint?->city;
-			$data['unloading_point'] = $unloadingPoint?->address ?? $unloadingPoint?->city;
-			$data['loading_date'] = $loadingPoint?->planned_date?->format('Y-m-d');
-			$data['unloading_date'] = $unloadingPoint?->planned_date?->format('Y-m-d');
-		}
-		
-		// Добавляем имена контрагентов
-		$data['customer_name'] = $order->customer?->name;
-		$data['carrier_name'] = $order->carrier?->name;
-		$data['driver_name'] = $order->driver?->full_name;
-		$data['manager_name'] = $order->manager?->name;
-		
-		// Форматируем дату заказа
-		$data['order_date'] = $order->order_date?->format('Y-m-d');
-		
-		return response()->json($data);
-	});
+        $order = Order::with([
+            'manager', 
+            'customer', 
+            'carrier', 
+            'driver',
+            'legs.points',
+            'legs.cargos',
+            'paymentSchedules'
+        ])->findOrFail($id);
+        
+        $data = $order->toArray();
+        $data['status'] = $order->status;
+        
+        // Добавляем поля из legs для удобства модалки
+        $leg = $order->legs->first();
+        if ($leg) {
+            $loadingPoint = $leg->points->where('type', 'loading')->first();
+            $unloadingPoint = $leg->points->where('type', 'unloading')->first();
+            
+            $data['loading_point'] = $loadingPoint?->address ?? $loadingPoint?->city;
+            $data['unloading_point'] = $unloadingPoint?->address ?? $unloadingPoint?->city;
+            $data['loading_date'] = $loadingPoint?->planned_date?->format('Y-m-d');
+            $data['unloading_date'] = $unloadingPoint?->planned_date?->format('Y-m-d');
+        }
+        
+        // Добавляем имена контрагентов
+        $data['customer_name'] = $order->customer?->name;
+        $data['carrier_name'] = $order->carrier?->name;
+        $data['driver_name'] = $order->driver?->full_name;
+        $data['manager_name'] = $order->manager?->name;
+        
+        // Форматируем дату заказа
+        $data['order_date'] = $order->order_date?->format('Y-m-d');
+        
+        return response()->json($data);
+    });
     
     Route::post('/api/orders', function (Request $request) {
         $validated = $request->validate([
